@@ -1,0 +1,46 @@
+[package]
+name = "retro-pong"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.97.1"
+description = "A 32-bit-inspired Pong arcade game with solo AI, local multiplayer, and multi-ball power-ups"
+authors = ["Muhammad Malek Alset"]
+license = "MIT"
+readme = "README.md"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bevy_ecs = { version = "0.20.1", default-features = false, features = ["std"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "wasmbind"] }
+
+[dependencies.bevy]
+version = "0.20.1"
+default-features = false
+features = ["2d", "audio", "wav", "web", "system_font_discovery", "png", "bevy_gilrs"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rfd = "0.15"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["Window", "Storage"] }
+
+[features]
+default = ["renderer-webgl2"]
+renderer-webgl2 = ["bevy/webgl2"]
+renderer-webgpu = ["bevy/webgpu"]
+diagnose-b0001 = ["bevy_ecs/debug"]
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = 3
+strip = true

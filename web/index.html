@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#070b15" />
+  <meta name="description" content="Retro Pong — a 32-bit-inspired arcade challenge." />
+  <title>Retro Pong — Arcade Edition</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <main class="cabinet" aria-label="Retro Pong arcade cabinet">
+    <header class="cabinet__header">
+      <span class="cabinet__brand">RETRO PONG</span>
+      <span class="cabinet__status"><i aria-hidden="true"></i> ARCADE SYSTEM ONLINE</span>
+    </header>
+    <div class="screen-frame">
+      <canvas id="game-canvas" tabindex="0" aria-label="Retro Pong game canvas"></canvas>
+      <section id="boot-overlay" class="boot-overlay" aria-live="polite">
+        <div class="boot-overlay__panel">
+          <p class="boot-overlay__eyebrow">32-BIT ARCADE EXPERIENCE</p>
+          <h1>RETRO PONG</h1>
+          <p id="boot-status" class="boot-overlay__status">Checking browser graphics support…</p>
+          <button id="start-game" type="button" disabled>PLEASE WAIT</button>
+          <p id="boot-detail" class="boot-overlay__detail">WebAssembly game is loading.</p>
+        </div>
+      </section>
+    </div>
+    <footer class="cabinet__footer">
+      <span>32-BIT CLASSICS</span>
+      <span>ARROW KEYS TO PLAY · ENTER TO SELECT</span>
+    </footer>
+  </main>
+  <noscript>This game requires JavaScript and WebAssembly support.</noscript>
+
+  <script>
+    (() => {
+      if (typeof window.AudioContext !== "function") return;
+
+      const contexts = [];
+      let userHasInteracted = false;
+      const interactionEvents = [
+        "click", "contextmenu", "auxclick", "dblclick", "mousedown",
+        "mouseup", "pointerup", "touchend", "keydown", "keyup"
+      ];
+
+      const NativeAudioContext = window.AudioContext;
+      window.AudioContext = new Proxy(NativeAudioContext, {
+        construct(target, args) {
+          const context = Reflect.construct(target, args, target);
+          contexts.push(context);
+          if (userHasInteracted && context.state !== "running") {
+            context.resume().catch((error) => {
+              console.warn("Retro Pong could not resume a new browser audio context:", error);
+            });
+          }
+          return context;
+        }
+      });
+
+      function resumeContexts() {
+        userHasInteracted = true;
+        for (const context of contexts) {
+          if (context.state !== "running" && context.state !== "closed") {
+            context.resume().catch((error) => {
+              console.warn("Retro Pong could not resume browser audio yet:", error);
+            });
+          }
+        }
+      }
+
+      interactionEvents.forEach((eventName) => {
+        document.addEventListener(eventName, resumeContexts, { passive: true });
+      });
+    })();
+  </script>
+
+  <script type="module">
+    const overlay = document.getElementById("boot-overlay");
+    const startButton = document.getElementById("start-game");
+    const status = document.getElementById("boot-status");
+    const detail = document.getElementById("boot-detail");
+
+    let selectedRenderer = null;
+    let webGpuAvailable = false;
+    let starting = false;
+
+    function unlockAudioFromUserGesture() {
+      const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextConstructor) return Promise.resolve();
+
+      try {
+        const unlockContext = new AudioContextConstructor();
+        return unlockContext.resume()
+          .catch((error) => console.warn("Browser audio unlock was deferred:", error))
+          .finally(() => unlockContext.close().catch(() => {}));
+      } catch (error) {
+        console.warn("Browser audio unlock is unavailable:", error);
+        return Promise.resolve();
+      }
+    }
+
+    function setBootError(message, hint) {
+      status.textContent = message;
+      detail.textContent = hint;
+      detail.classList.add("boot-overlay__detail--error");
+      startButton.disabled = true;
+      startButton.textContent = "GRAPHICS NOT AVAILABLE";
+    }
+
+    async function supportsWebGpu() {
+      if (!navigator.gpu || typeof navigator.gpu.requestAdapter !== "function") return false;
+      try {
+        let adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+        if (!adapter) adapter = await navigator.gpu.requestAdapter();
+        return adapter !== null;
+      } catch (error) {
+        console.warn("WebGPU adapter detection failed:", error);
+        return false;
+      }
+    }
+
+    function supportsWebGl2() {
+      const probeCanvas = document.createElement("canvas");
+      try {
+        const context = probeCanvas.getContext("webgl2", {
+          alpha: false,
+          antialias: false,
+          depth: false,
+          stencil: false,
+          failIfMajorPerformanceCaveat: false,
+          preserveDrawingBuffer: false,
+          powerPreference: "high-performance"
+        });
+        if (!context) return false;
+
+        context.getExtension("WEBGL_lose_context")?.loseContext();
+        return true;
+      } catch (error) {
+        console.warn("WebGL2 capability probe failed:", error);
+        return false;
+      }
+    }
+
+    async function detectRenderer() {
+      const requestedRenderer = new URLSearchParams(window.location.search).get("renderer");
+
+      if (requestedRenderer === "webgpu") {
+        webGpuAvailable = await supportsWebGpu();
+        return webGpuAvailable ? "webgpu" : null;
+      }
+
+      const webGlAvailable = supportsWebGl2();
+      if (requestedRenderer === "webgl2") return webGlAvailable ? "webgl2" : null;
+
+      webGpuAvailable = await supportsWebGpu();
+      if (webGlAvailable) return "webgl2";
+      if (webGpuAvailable) return "webgpu";
+      return null;
+    }
+
+    async function launchRenderer(renderer) {
+      const packagePath = renderer === "webgpu" ? "./pkg/webgpu" : "./pkg/webgl2";
+      const { default: init } = await import(`${packagePath}/retro_pong.js`);
+      await init();
+    }
+
+    async function prepareGame() {
+      try {
+        selectedRenderer = await detectRenderer();
+        if (!selectedRenderer) {
+          setBootError(
+            "No supported graphics renderer was found.",
+            "Enable hardware acceleration and WebGL2 in your browser, update your GPU driver, or try a browser with WebGPU support. You can also test the alternate renderer with ?renderer=webgpu. In Chrome, inspect chrome://gpu."
+          );
+          return;
+        }
+
+        status.textContent = selectedRenderer === "webgpu"
+          ? "WebGPU renderer ready — preparing the game…"
+          : "WebGL2 renderer ready — preparing the game…";
+        detail.textContent = "Click START ARCADE to launch the game. Your first interaction also unlocks browser audio.";
+        startButton.disabled = false;
+        startButton.textContent = "START ARCADE";
+      } catch (error) {
+        console.error("Retro Pong browser preflight failed:", error);
+        setBootError("Could not initialize browser graphics.", String(error));
+      }
+    }
+
+    startButton.addEventListener("click", async () => {
+      if (starting || !selectedRenderer) return;
+      starting = true;
+      startButton.disabled = true;
+      startButton.textContent = "LOADING…";
+      status.textContent = "Starting the arcade…";
+      detail.textContent = `Renderer: ${selectedRenderer.toUpperCase()}`;
+
+      try {
+        await unlockAudioFromUserGesture();
+        try {
+          await launchRenderer(selectedRenderer);
+        } catch (primaryError) {
+          if (selectedRenderer !== "webgl2" || !webGpuAvailable) throw primaryError;
+          console.warn("WebGL2 renderer failed; retrying with WebGPU:", primaryError);
+          status.textContent = "WebGL2 could not initialize. Switching to WebGPU…";
+          detail.textContent = "The page will reload and start with the WebGPU fallback renderer.";
+          const fallbackUrl = new URL(window.location.href);
+          fallbackUrl.searchParams.set("renderer", "webgpu");
+          window.location.replace(fallbackUrl.toString());
+          return;
+        }
+
+        overlay.classList.add("boot-overlay--hidden");
+        document.getElementById("game-canvas")?.focus({ preventScroll: true });
+      } catch (error) {
+        console.error("Retro Pong failed to initialize:", error);
+        setBootError(
+          "The game could not start.",
+          `Renderer: ${selectedRenderer}. ${error?.message || error}. Check browser graphics acceleration, WebGL2/WebGPU support, and the console for details.`
+        );
+        starting = false;
+      }
+    });
+
+    prepareGame();
+  </script>
+</body>
+</html>

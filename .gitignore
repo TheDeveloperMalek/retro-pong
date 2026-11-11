@@ -1,0 +1,13 @@
+/target/
+/web/pkg/
+/web/assets/
+/web-dist/
+*.profraw
+.DS_Store
+Thumbs.db
+__pycache__/
+*.py[cod]
+
+# Downloaded automatically by the WebAssembly build scripts
+/assets/fonts/NotoSansMono-VF.ttf
+/assets/fonts/OFL.txt
